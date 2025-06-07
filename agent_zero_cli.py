@@ -141,19 +141,24 @@ async def send_message_to_agent(client, message, chat_id=None, persistent_chat=F
 async def main():
     parser = argparse.ArgumentParser(description='Agent Zero CLI Client')
     parser.add_argument('message', help='Message to send to Agent Zero')
-    parser.add_argument('-p', '--persistent', action='store_true',
-                       help='Use persistent chat (allows follow-up questions)')
+    parser.add_argument('-1', '--one-shot', action='store_true',
+                        help='Run in non-persistent mode (single interaction)')
     parser.add_argument('--chat-id', help='Continue existing chat with this ID')
-    
+
     args = parser.parse_args()
-    
+
+    # Determine if the chat should be persistent
+    is_persistent = not args.one_shot
+
     # URL del server Agent Zero MCP
     server_url = "http://localhost:5000/mcp/t-0/sse"
-    
+
     print(f"🔗 Connecting to Agent Zero at: {server_url}")
     print(f"💬 Message: {args.message}")
-    if args.persistent:
-        print("🔄 Using persistent chat - you can ask follow-up questions")
+    if is_persistent:
+        print("🔄 Using persistent chat (default) - you can ask follow-up questions")
+    else:
+        print("-1️⃣ Using one-shot mode - the script will exit after the response")
     if args.chat_id:
         print(f"📝 Continuing chat: {args.chat_id}")
     
@@ -177,11 +182,11 @@ async def main():
                 client,
                 processed_initial_message,
                 args.chat_id,
-                args.persistent
+                is_persistent
             )
             
             # Se è una chat persistente, entra nel loop interattivo
-            if args.persistent:
+            if is_persistent:
                 if chat_id:
                     print(f"\n💾 Chat ID: {chat_id}")
                 
