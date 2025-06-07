@@ -38,91 +38,66 @@ class AgentZeroMCPClient:
             # Generate a unique request ID
             request_id = str(uuid.uuid4())
             
-            # Create a session for connection reuse
-            with requests.Session() as session:
-                # First establish SSE connection to get session_id
-                print(f"🔗 Establishing SSE connection: {self.sse_url}")
-                
-                # Headers for SSE request
-                sse_headers = {
-                    'Accept': 'text/event-stream',
-                    'Cache-Control': 'no-cache',
-                    'X-Request-ID': request_id
-                }
-                
-                # Start SSE connection to get session_id
-                sse_response = session.get(
-                    self.sse_url,
-                    stream=True,
-                    headers=sse_headers,
-                    timeout=30
-                )
-                sse_response.raise_for_status()
-                print(f"✅ SSE connection established")
-                
-                # Extract session_id from SSE response
-                session_id = self._extract_session_id(sse_response)
-                if not session_id:
-                    raise ConnectionError("Could not obtain session_id from SSE connection")
-                
-                print(f"✅ Session ID obtained: {session_id}")
-                
-                # Now send the message request with session_id
-                messages_url_with_session = f"{self.messages_url}?session_id={session_id}"
-                print(f"📤 Sending message request to: {messages_url_with_session}")
-                
-                # FastMCP expects specific JSON-RPC 2.0 format
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "send_message",
-                        "arguments": {
-                            "message": message,
-                            "attachments": None,
-                            "chat_id": None,
-                            "persistent_chat": None
-                        }
+            # First get session_id from SSE
+            session_id = self._get_session_id()
+            if not session_id:
+                raise ConnectionError("Could not obtain session_id from SSE connection")
+            
+            print(f"✅ Session ID obtained: {session_id}")
+            
+            # Now send the message request with session_id
+            messages_url_with_session = f"{self.messages_url}?session_id={session_id}"
+            print(f"📤 Sending message request to: {messages_url_with_session}")
+            
+            # FastMCP expects specific JSON-RPC 2.0 format
+            payload = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {
+                    "name": "send_message",
+                    "arguments": {
+                        "message": message,
+                        "attachments": None,
+                        "chat_id": None,
+                        "persistent_chat": None
                     }
                 }
-                
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-Request-ID': request_id
-                }
-                
-                # Send the message request
-                response = session.post(
-                    messages_url_with_session,
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                )
-                
-                print(f"🔍 Response status: {response.status_code}")
-                
-                # Process the response
-                if response.status_code in (200, 202):
-                    print("✅ Message request accepted")
-                    
-                    if response.status_code == 200:
-                        # Direct response
-                        try:
-                            result = response.json()
-                            print("📨 Agent Zero Response:")
-                            print(json.dumps(result, indent=2))
-                            return
-                        except json.JSONDecodeError:
-                            print(f"📝 Raw response: {response.text}")
-                    else:
-                        # Async response - we need to wait for events on the SSE connection
-                        self._process_sse_events_with_session(session, session_id)
-                else:
-                    print(f"❌ Request failed with status: {response.status_code}")
-                    print(f"Response: {response.text}")
-                    response.raise_for_status()
+            }
+            
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
+            # Send the message request
+            response = requests.post(
+                messages_url_with_session,
+                json=payload,
+                headers=headers,
+                timeout=60
+            )
+            
+            print(f"🔍 Response status: {response.status_code}")
+            
+            # Process the response
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                    print("📨 Agent Zero Response:")
+                    print(json.dumps(result, indent=2))
+                    return
+                except json.JSONDecodeError:
+                    print(f"📝 Raw response: {response.text}")
+                    return
+            elif response.status_code == 202:
+                print("✅ Message request accepted, waiting for response...")
+                # For 202, we need to wait for response via SSE
+                self._wait_for_sse_response_with_session(session_id)
+            else:
+                print(f"❌ Request failed with status: {response.status_code}")
+                print(f"Response: {response.text}")
+                response.raise_for_status()
                     
         except requests.exceptions.RequestException as e:
             print(f"❌ Request error: {str(e)}")
@@ -134,11 +109,21 @@ class AgentZeroMCPClient:
             print(f"❌ Unexpected error: {str(e)}")
             sys.exit(1)
 
-    def _extract_session_id(self, sse_response):
-        """Extract session_id from the initial SSE connection"""
+    def _get_session_id(self):
+        """Get session_id from SSE connection"""
         try:
-            # Read the first few lines to get the session_id
-            for chunk in sse_response.iter_content(chunk_size=1024):
+            print(f"🔗 Getting session ID from: {self.sse_url}")
+            
+            headers = {
+                'Accept': 'text/event-stream',
+                'Cache-Control': 'no-cache'
+            }
+            
+            response = requests.get(self.sse_url, stream=True, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Read the first chunk to get session_id
+            for chunk in response.iter_content(chunk_size=1024):
                 if chunk:
                     chunk_text = chunk.decode('utf-8', errors='replace')
                     lines = chunk_text.split('\n')
@@ -150,37 +135,110 @@ class AgentZeroMCPClient:
                             # Look for endpoint path with session_id
                             if data.startswith('/mcp/t-') and '?session_id=' in data:
                                 session_id = data.split('?session_id=')[1]
+                                response.close()
                                 return session_id
-                            # Or look for direct session_id
-                            elif data and not data.startswith('{'):
-                                return data
                     
-                    # Stop after first chunk to avoid blocking
+                    # Stop after first chunk
                     break
             
+            response.close()
             return None
             
         except Exception as e:
-            print(f"❌ Error extracting session_id: {e}")
+            print(f"❌ Error getting session_id: {e}")
             return None
 
-    def _process_sse_events_with_session(self, session, session_id):
-        """Process events from a new SSE connection with session_id"""
+    def _wait_for_sse_response_with_session(self, session_id):
+        """Wait for response via SSE connection with session_id"""
         try:
             sse_url_with_session = f"{self.sse_url}?session_id={session_id}"
-            print(f"👂 Listening for response on: {sse_url_with_session}")
+            print(f"👂 Waiting for response on: {sse_url_with_session}")
             
             headers = {
                 'Accept': 'text/event-stream',
                 'Cache-Control': 'no-cache'
             }
             
-            with session.get(sse_url_with_session, headers=headers, stream=True, timeout=300) as response:
+            with requests.get(sse_url_with_session, headers=headers, stream=True, timeout=300) as response:
                 response.raise_for_status()
-                self._process_sse_events(response)
+                print("✅ SSE connection established")
+                self._process_sse_events_simple(response)
                 
         except Exception as e:
-            print(f"❌ Error in SSE with session: {e}")
+            print(f"❌ Error in SSE connection: {e}")
+
+    def _process_sse_events_simple(self, sse_response):
+        """Process SSE events with simplified logic - no session switching"""
+        try:
+            print("👂 Waiting for Agent Zero response via SSE...")
+            
+            buffer = ""
+            last_activity = time.time()
+            
+            for chunk in sse_response.iter_content(chunk_size=1024):
+                if chunk:
+                    last_activity = time.time()
+                    chunk_text = chunk.decode('utf-8', errors='replace')
+                    buffer += chunk_text
+                    
+                    # Process complete lines
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        
+                        if not line:
+                            continue
+                            
+                        if line.startswith('event:'):
+                            event_type = line[6:].strip()
+                            print(f"🎯 Event: {event_type}")
+                            
+                            if event_type in ['end', 'done', 'complete']:
+                                print("🏁 Stream complete")
+                                return
+                                
+                        elif line.startswith('data:'):
+                            data = line[5:].strip()
+                            
+                            # Check if this is a complete message
+                            if data == '[DONE]':
+                                print("🏁 Stream complete")
+                                return
+                            
+                            # Ignore new endpoints - just wait for actual response
+                            if data.startswith('/mcp/t-') and 'session_id=' in data:
+                                print(f"🔄 Ignoring new endpoint: {data}")
+                                continue
+                                
+                            try:
+                                # Try to parse JSON response
+                                parsed_data = json.loads(data)
+                                if isinstance(parsed_data, dict):
+                                    if 'result' in parsed_data:
+                                        result = parsed_data['result']
+                                        print("📨 Agent Zero Response:")
+                                        print(json.dumps(result, indent=2))
+                                        return
+                                    elif 'response' in parsed_data:
+                                        print("📨 Agent Zero Response:")
+                                        print(json.dumps(parsed_data, indent=2))
+                                        return
+                            except json.JSONDecodeError:
+                                # Not JSON, might be plain text response
+                                if data and data != '[DONE]':
+                                    print(f"📝 Message: {data}")
+                
+                # Check for timeout
+                if time.time() - last_activity > 120:
+                    print("⏰ No activity for 2 minutes, closing connection")
+                    break
+            
+            print("⏰ SSE stream ended without complete response")
+            
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error in SSE stream: {str(e)}")
+        except Exception as e:
+            print(f"❌ Unexpected error: {str(e)}")
 
     def _process_sse_events(self, sse_response):
         """Process events from the SSE connection to get the Agent Zero response"""
