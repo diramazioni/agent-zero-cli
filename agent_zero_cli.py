@@ -10,8 +10,7 @@ import json
 import requests
 import sys
 import os
-import urllib.parse
-from typing import Optional, List
+from typing import Optional
 
 try:
     from dotenv import load_dotenv
@@ -21,51 +20,61 @@ except ImportError:
 
 class AgentZeroMCPClient:
     def __init__(self, base_url: str = None, token: str = None):
-        self.base_url = (base_url or os.getenv('AGENT_ZERO_MCP_URL', 'http://localhost:50000')).rstrip('/')
+        self.base_url = (base_url or os.getenv('AGENT_ZERO_MCP_URL', 'http://localhost:5000')).rstrip('/')
         self.token = token or os.getenv('AGENT_ZERO_MCP_TOKEN', '0')
         self.session = requests.Session()
         self.sse_url = f"{self.base_url}/mcp/t-{self.token}/sse"
 
-    def stream_tool_call(self, payload: dict):
-        """Connects to the SSE endpoint, sends a tool call, and streams the response."""
-        print(f"🔗 Connecting to SSE stream: {self.sse_url}", file=sys.stderr)
-        headers = {'Accept': 'text/event-stream'}
-        
+    def get_session_endpoint(self) -> Optional[str]:
+        """Performs an initial GET to the SSE endpoint to get the session-specific URL."""
+        print(f"🔗 Initializing session with: {self.sse_url}", file=sys.stderr)
         try:
-            with self.session.get(self.sse_url, headers=headers, stream=True, timeout=180) as response:
+            headers = {'Accept': 'text/event-stream'}
+            with self.session.get(self.sse_url, headers=headers, stream=True, timeout=15) as response:
                 response.raise_for_status()
-                
-                messages_url = None
-                
-                # First, listen for the 'endpoint' event to know where to POST
                 for line in response.iter_lines():
                     if line:
                         decoded_line = line.decode('utf-8')
-                        if decoded_line.startswith('event: endpoint'):
-                            # The next line should be the data line
-                            continue
                         if decoded_line.startswith('data:'):
-                            messages_endpoint = decoded_line[len('data:'):].strip()
-                            # Construct the full URL for the POST request
-                            messages_url = urllib.parse.urljoin(self.base_url, messages_endpoint)
-                            break # Got the URL, exit this loop
+                            endpoint_path = decoded_line[len('data:'):].strip()
+                            session_url = f"{self.base_url.rstrip('/')}{endpoint_path}"
+                            print(f"✅ Session endpoint received: {session_url}", file=sys.stderr)
+                            return session_url
+            print("❌ Error: Did not receive a session endpoint from the server.", file=sys.stderr)
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error: Failed to initialize session: {str(e)}", file=sys.stderr)
+            return None
 
-                if not messages_url:
-                    print("❌ Error: Did not receive the messages endpoint from the server.", file=sys.stderr)
-                    sys.exit(1)
+    def stream_tool_call(self, payload: dict):
+        """Connects to the MCP endpoint using the 3-step handshake and streams the response."""
+        session_url = self.get_session_endpoint()
+        if not session_url:
+            sys.exit(1)
 
-                # Construct a JSON-RPC 2.0 compliant payload
-                jsonrpc_payload = payload.copy()
-                jsonrpc_payload['jsonrpc'] = '2.0'
-                jsonrpc_payload['id'] = 1 # A simple ID for the request
+        try:
+            # Add JSON-RPC required fields
+            payload['jsonrpc'] = '2.0'
+            payload['id'] = 1
 
-                # Now, make the POST request to the obtained URL with the JSON-RPC payload
-                print(f"📮 Sending command to: {messages_url}", file=sys.stderr)
-                post_headers = {'Content-Type': 'application/json'}
-                post_response = requests.post(messages_url, json=jsonrpc_payload, headers=post_headers)
-                post_response.raise_for_status()
+            # Step 2: Send the message payload via a direct POST, passing session cookies manually
+            print(f"📤 Sending payload to: {session_url}", file=sys.stderr)
+            post_headers = {'Content-Type': 'application/json'}
+            post_data = json.dumps(payload)
+            post_response = requests.post(session_url, data=post_data, headers=post_headers, cookies=self.session.cookies, timeout=30)
+            
+            # Update the session with any cookies from the POST response
+            self.session.cookies.update(post_response.cookies)
 
-                # Continue listening on the original stream for the agent's response
+            post_response.raise_for_status()
+            if post_response.status_code != 202:
+                print(f"⚠️ Warning: Expected status 202 but got {post_response.status_code}", file=sys.stderr)
+
+            # Step 3: Listen for the response via streaming GET using the original session
+            print(f"👂 Listening for response from: {session_url}", file=sys.stderr)
+            get_headers = {'Accept': 'text/event-stream'}
+            with self.session.get(session_url, headers=get_headers, stream=True, timeout=180) as response:
+                response.raise_for_status()
                 for line in response.iter_lines():
                     if line:
                         decoded_line = line.decode('utf-8')
@@ -75,24 +84,19 @@ class AgentZeroMCPClient:
                                 event = json.loads(json_data)
                                 print(json.dumps(event, indent=2))
                             except json.JSONDecodeError:
-                                print(json_data) # Print as-is if not JSON
+                                print(json_data)
                         elif 'event: end' in decoded_line:
                             print("\n🏁 Stream finished.", file=sys.stderr)
                             break
-            
-            sys.exit(0) # Success
-
         except requests.exceptions.RequestException as e:
-            print(f"❌ Error: Request failed: {str(e)}", file=sys.stderr)
+            print(f"❌ Error: Request failed during communication: {str(e)}", file=sys.stderr)
             sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(
         description="Agent Zero MCP CLI Client (SSE Version)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""Examples:
-  ./agent_zero_cli.py "What is your name?"
-  ./agent_zero_cli.py --finish-chat <chat_id_to_close>\n"""
+        epilog="""Examples:\n  ./agent_zero_cli.py "What is your name?"\n  ./agent_zero_cli.py --finish-chat <chat_id_to_close>\n"""
     )
     parser.add_argument("message", nargs="?", help="Message to send to Agent Zero")
     parser.add_argument("--url", help="Base URL for Agent Zero MCP server")
@@ -113,7 +117,7 @@ def main():
             "params": {"name": "finish_chat", "arguments": {"chat_id": args.finish_chat}}
         }
     elif args.message:
-        print(f"📤 Sending message...", file=sys.stderr)
+        print(f"📤 Sending initial message...", file=sys.stderr)
         arguments = {"message": args.message}
         if args.attachments: arguments["attachments"] = args.attachments
         if args.chat_id: arguments["chat_id"] = args.chat_id
