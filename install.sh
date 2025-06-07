@@ -6,13 +6,35 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# Function to check and install uv
+install_uv() {
+    # Ensure uv's install path is in PATH for this function
+    export PATH="/root/.local/bin:$PATH"
+    if ! command -v uv &> /dev/null; then
+        echo "uv not found. Installing uv..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to install uv."
+            exit 1
+        fi
+        echo "uv installed successfully."
+    else
+        echo "uv is already installed."
+    fi
+}
+
 # Get the directory where the script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SOURCE_FILE="$SCRIPT_DIR/agent_zero_cli.py"
+ENV_FILE="$SCRIPT_DIR/.env"
+PYPROJECT_TOML="$SCRIPT_DIR/pyproject.toml"
+VENV_DIR="/opt/agent_zero_venv" # New: System-wide virtual environment directory
 DEST_DIR="/usr/local/bin"
 DEST_FILE="$DEST_DIR/agent_zero_cli.py"
 ALIAS_NAME="A0"
 ALIAS_PATH="$DEST_DIR/$ALIAS_NAME"
+CONFIG_DIR="/etc/agent_zero"
+CONFIG_FILE="$CONFIG_DIR/.env"
 
 # Check if the source file exists
 if [ ! -f "$SOURCE_FILE" ]; then
@@ -22,28 +44,78 @@ fi
 
 echo "Installing Agent Zero CLI..."
 
-# Make the script executable
-echo "1. Making agent_zero_cli.py executable..."
-chmod +x "$SOURCE_FILE"
+# Install uv if not present
+install_uv
+
+# Create and activate a system-wide virtual environment
+echo "1. Setting up Python virtual environment in $VENV_DIR..."
+mkdir -p "$VENV_DIR"
 if [ $? -ne 0 ]; then
-    echo "Error: Failed to make the script executable."
+    echo "Error: Failed to create virtual environment directory $VENV_DIR."
     exit 1
 fi
 
-# Copy the script to the destination directory
-echo "2. Copying agent_zero_cli.py to $DEST_DIR..."
-cp "$SOURCE_FILE" "$DEST_FILE"
+# Ensure uv is in PATH for the current shell session
+uv venv "$VENV_DIR"
 if [ $? -ne 0 ]; then
-    echo "Error: Failed to copy the script."
+    echo "Error: Failed to create virtual environment."
+    exit 1
+fi
+echo "   - Virtual environment created."
+
+# Install Python dependencies using uv
+echo "2. Installing Python dependencies with uv..."
+if [ -f "$PYPROJECT_TOML" ]; then
+    # Use the system-wide uv to sync dependencies into the virtual environment
+    uv pip sync --python "$VENV_DIR/bin/python" "$PYPROJECT_TOML"
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to install Python dependencies."
+        exit 1
+    fi
+    echo "   - Python dependencies installed."
+else
+    echo "   - Warning: pyproject.toml not found. Skipping Python dependency installation."
+fi
+
+# Copy the script to the virtual environment's bin directory
+echo "3. Copying agent_zero_cli.py to $VENV_DIR/bin/..."
+cp "$SOURCE_FILE" "$VENV_DIR/bin/agent_zero_cli.py"
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to copy the script to virtual environment."
     exit 1
 fi
 
-# Create the symbolic link
-echo "3. Creating the 'A0' alias..."
-ln -sf "$DEST_FILE" "$ALIAS_PATH"
+# Make the script executable within the venv
+chmod +x "$VENV_DIR/bin/agent_zero_cli.py"
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to make the script executable in virtual environment."
+    exit 1
+fi
+
+# Create the symbolic link for the alias, pointing to the script in the venv
+echo "4. Creating the 'A0' alias..."
+ln -sf "$VENV_DIR/bin/agent_zero_cli.py" "$ALIAS_PATH"
 if [ $? -ne 0 ]; then
     echo "Error: Failed to create the alias."
     exit 1
+fi
+
+# Create system-wide config directory and copy .env file
+echo "5. Setting up system-wide configuration..."
+if [ -f "$ENV_FILE" ]; then
+    mkdir -p "$CONFIG_DIR"
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to create configuration directory $CONFIG_DIR."
+        exit 1
+    fi
+    cp "$ENV_FILE" "$CONFIG_FILE"
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to copy .env file to $CONFIG_FILE."
+        exit 1
+    fi
+    echo "   - Configuration copied to $CONFIG_FILE"
+else
+    echo "   - Warning: .env file not found. Skipping configuration setup."
 fi
 
 echo "✅ Installation complete!"

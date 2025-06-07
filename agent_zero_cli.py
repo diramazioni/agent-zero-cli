@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/agent_zero_venv/bin/python3
 
 import asyncio
 import sys
@@ -10,6 +10,7 @@ from fastmcp import Client
 from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
+from dotenv import load_dotenv
 
 def execute_command(command):
     """Execute a shell command and return its output"""
@@ -139,6 +140,19 @@ async def send_message_to_agent(client, message, chat_id=None, persistent_chat=F
     return result, current_chat_id
 
 async def main():
+    # Setup configuration
+    # First, try to load a local .env file (for development)
+    local_env_path = Path('.env')
+    # Then, define the system-wide configuration path
+    system_env_path = Path('/etc/agent_zero/.env')
+
+    if local_env_path.is_file():
+        load_dotenv(dotenv_path=local_env_path)
+        print("ℹ️ Loaded configuration from local .env file.")
+    elif system_env_path.is_file():
+        load_dotenv(dotenv_path=system_env_path)
+        print(f"ℹ️ Loaded configuration from {system_env_path}.")
+
     parser = argparse.ArgumentParser(description='Agent Zero CLI Client')
     parser.add_argument('message', help='Message to send to Agent Zero')
     parser.add_argument('-1', '--one-shot', action='store_true',
