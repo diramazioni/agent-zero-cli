@@ -21,43 +21,70 @@ except ImportError:
 
 class AgentZeroMCPClient:
     def __init__(self, base_url: str = None, token: str = None):
-        self.base_url = (base_url or os.getenv('AGENT_ZERO_MCP_URL', 'http://localhost:5000')).rstrip('/')
+        self.base_url = (base_url or os.getenv('AGENT_ZERO_MCP_URL', 'http://localhost:50000')).rstrip('/')
         self.token = token or os.getenv('AGENT_ZERO_MCP_TOKEN', '0')
         self.session = requests.Session()
         self.sse_url = f"{self.base_url}/mcp/t-{self.token}/sse"
 
     def stream_tool_call(self, payload: dict):
-        """Connects to the SSE endpoint and streams the response for a given tool call payload."""
+        """Connects to the SSE endpoint, sends a tool call, and streams the response."""
+        print(f"🔗 Connecting to SSE stream: {self.sse_url}", file=sys.stderr)
+        headers = {'Accept': 'text/event-stream'}
+        
         try:
-            # URL-encode the JSON payload to pass as a query parameter
-            encoded_payload = urllib.parse.quote(json.dumps(payload))
-            request_url = f"{self.sse_url}?query={encoded_payload}"
-
-            print(f"🔗 Connecting to SSE stream: {self.sse_url}", file=sys.stderr)
-            
-            headers = {'Accept': 'text/event-stream'}
-            with self.session.get(request_url, headers=headers, stream=True, timeout=180) as response:
+            with self.session.get(self.sse_url, headers=headers, stream=True, timeout=180) as response:
                 response.raise_for_status()
+                
+                messages_url = None
+                
+                # First, listen for the 'endpoint' event to know where to POST
+                for line in response.iter_lines():
+                    if line:
+                        decoded_line = line.decode('utf-8')
+                        if decoded_line.startswith('event: endpoint'):
+                            # The next line should be the data line
+                            continue
+                        if decoded_line.startswith('data:'):
+                            messages_endpoint = decoded_line[len('data:'):].strip()
+                            # Construct the full URL for the POST request
+                            messages_url = urllib.parse.urljoin(self.base_url, messages_endpoint)
+                            break # Got the URL, exit this loop
+
+                if not messages_url:
+                    print("❌ Error: Did not receive the messages endpoint from the server.", file=sys.stderr)
+                    sys.exit(1)
+
+                # Construct a JSON-RPC 2.0 compliant payload
+                jsonrpc_payload = payload.copy()
+                jsonrpc_payload['jsonrpc'] = '2.0'
+                jsonrpc_payload['id'] = 1 # A simple ID for the request
+
+                # Now, make the POST request to the obtained URL with the JSON-RPC payload
+                print(f"📮 Sending command to: {messages_url}", file=sys.stderr)
+                post_headers = {'Content-Type': 'application/json'}
+                post_response = requests.post(messages_url, json=jsonrpc_payload, headers=post_headers)
+                post_response.raise_for_status()
+
+                # Continue listening on the original stream for the agent's response
                 for line in response.iter_lines():
                     if line:
                         decoded_line = line.decode('utf-8')
                         if decoded_line.startswith('data:'):
                             json_data = decoded_line[len('data:'):].strip()
                             try:
-                                # Attempt to parse the data as JSON and print it
                                 event = json.loads(json_data)
-                                # Pretty print the JSON output
                                 print(json.dumps(event, indent=2))
                             except json.JSONDecodeError:
-                                # If it's not JSON, print as plain text
-                                print(json_data)
+                                print(json_data) # Print as-is if not JSON
                         elif 'event: end' in decoded_line:
                             print("\n🏁 Stream finished.", file=sys.stderr)
                             break
+            
+            sys.exit(0) # Success
 
         except requests.exceptions.RequestException as e:
             print(f"❌ Error: Request failed: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+            sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(
