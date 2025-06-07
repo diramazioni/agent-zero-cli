@@ -7,6 +7,9 @@ import json
 import subprocess
 import re
 from fastmcp import Client
+from pathlib import Path
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
 
 def execute_command(command):
     """Execute a shell command and return its output"""
@@ -187,10 +190,13 @@ async def main():
                 print("Type 'quit', 'exit', or press Ctrl+C to end the session")
                 print("="*50)
                 
+                history_file = str(Path.home() / ".agent_zero_cli_history")
+                session = PromptSession(history=FileHistory(history_file))
+                
                 while True:
                     try:
                         # Chiedi il prossimo messaggio
-                        follow_up = input("\n💬 Your message: ").strip()
+                        follow_up = (await session.prompt_async("\n💬 Your message: ")).strip()
                         
                         if follow_up.lower() in ['quit', 'exit', 'q']:
                             break
