@@ -23,18 +23,43 @@ install_uv() {
     fi
 }
 
-# Get the directory where the script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-SOURCE_FILE="$SCRIPT_DIR/agent_zero_cli.py"
-ENV_FILE="$SCRIPT_DIR/.env"
-PYPROJECT_TOML="$SCRIPT_DIR/pyproject.toml"
-VENV_DIR="/opt/agent_zero_venv" # New: System-wide virtual environment directory
+# --- Configuration ---
+# IMPORTANTE: Sostituisci questo URL con l'URL del contenuto raw del tuo repository
+BASE_URL="https://raw.githubusercontent.com/diramazioni/agent-zero-cli/refs/heads/main"
+
+# --- Setup Directory Temporanea ---
+# Crea una directory temporanea per scaricare i file
+TMP_DIR=$(mktemp -d)
+if [ ! "$TMP_DIR" ] || [ ! -d "$TMP_DIR" ]; then
+  echo "Errore: Impossibile creare la directory temporanea." >&2
+  exit 1
+fi
+
+# Funzione per pulire la directory temporanea all'uscita
+cleanup() {
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+# --- Download dei file necessari ---
+echo "Scaricamento dei file di installazione..."
+curl -LsSf "$BASE_URL/agent_zero_cli.py" -o "$TMP_DIR/agent_zero_cli.py"
+if [ $? -ne 0 ]; then echo "Errore: Download di agent_zero_cli.py fallito." >&2; exit 1; fi
+
+curl -LsSf "$BASE_URL/pyproject.toml" -o "$TMP_DIR/pyproject.toml"
+if [ $? -ne 0 ]; then echo "Errore: Download di pyproject.toml fallito." >&2; exit 1; fi
+
+# .env è opzionale, quindi non generiamo un errore se manca
+curl -LsSf "$BASE_URL/.env" -o "$TMP_DIR/.env" >/dev/null 2>&1
+
+
+# --- Percorsi dei File ---
+# Definisce i percorsi per i file scaricati e le directory di destinazione
+SOURCE_FILE="$TMP_DIR/agent_zero_cli.py"
+ENV_FILE="$TMP_DIR/.env"
+PYPROJECT_TOML="$TMP_DIR/pyproject.toml"
+VENV_DIR="/opt/agent_zero_venv"
 DEST_DIR="/usr/local/bin"
-DEST_FILE="$DEST_DIR/agent_zero_cli.py"
-ALIAS_NAME="A0"
-ALIAS_PATH="$DEST_DIR/$ALIAS_NAME"
-CONFIG_DIR="/etc/agent_zero"
-CONFIG_FILE="$CONFIG_DIR/.env"
 
 # Check if the source file exists
 if [ ! -f "$SOURCE_FILE" ]; then
@@ -94,7 +119,7 @@ fi
 
 # Create the symbolic link for the alias, pointing to the script in the venv
 echo "4. Creating the 'A0' alias..."
-ln -sf "$VENV_DIR/bin/agent_zero_cli.py" "$ALIAS_PATH"
+ln -sf "$VENV_DIR/bin/agent_zero_cli.py" "$DEST_DIR/A0"
 if [ $? -ne 0 ]; then
     echo "Error: Failed to create the alias."
     exit 1
@@ -103,17 +128,17 @@ fi
 # Create system-wide config directory and copy .env file
 echo "5. Setting up system-wide configuration..."
 if [ -f "$ENV_FILE" ]; then
-    mkdir -p "$CONFIG_DIR"
+    mkdir -p "/etc/agent_zero"
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to create configuration directory $CONFIG_DIR."
+        echo "Error: Failed to create configuration directory /etc/agent_zero."
         exit 1
     fi
-    cp "$ENV_FILE" "$CONFIG_FILE"
+    cp "$ENV_FILE" "/etc/agent_zero/.env"
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to copy .env file to $CONFIG_FILE."
+        echo "Error: Failed to copy .env file to /etc/agent_zero/.env."
         exit 1
     fi
-    echo "   - Configuration copied to $CONFIG_FILE"
+    echo "   - Configuration copied to /etc/agent_zero/.env"
 else
     echo "   - Warning: .env file not found. Skipping configuration setup."
 fi

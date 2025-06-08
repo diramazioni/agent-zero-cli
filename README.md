@@ -14,31 +14,35 @@ This project provides a command-line interface (CLI) client for interacting with
 
 ## Installation
 
-To install the Agent Zero CLI client system-wide, follow these steps:
+To install or update the Agent Zero CLI client system-wide, run the following command in your terminal. This single command downloads and executes the installation script, which handles everything from setting up a virtual environment to creating a convenient alias.
 
-1.  **Navigate to the project directory**:
-    ```bash
-    cd /path/to/your/agent-zero-cli
-    ```
+```bash
+curl -LsSf https://raw.githubusercontent.com/diramazioni/agent-zero-cli/refs/heads/main/install.sh | sudo sh
+```
 
-2.  **Run the installation script**:
-    The `install.sh` script will make `agent_zero_cli.py` executable, copy it to `/usr/local/bin`, and create a symbolic link (alias) named `A0`.
+The script will perform the following steps:
+- Check for `sudo` permissions.
+- Install `uv` (a fast Python package installer) if it's not already present.
+- Create a system-wide virtual environment in `/opt/agent_zero_venv`.
+- Install all required Python dependencies from `pyproject.toml` into the virtual environment.
+- Copy the `agent_zero_cli.py` script into the virtual environment.
+- Create a symbolic link (alias) named `A0` in `/usr/local/bin` for easy access from anywhere.
+- Set up a system-wide configuration directory at `/etc/agent_zero` and copy the `.env` file if it exists in the repository.
 
-    ```bash
-    sudo ./install.sh
-    ```
+You will see detailed output as the script runs, and upon completion, you can start using the `A0` command immediately.
 
-    You will see output similar to this:
-    ```
-    Installing Agent Zero CLI...
-    1. Making agent_zero_cli.py executable...
-    2. Copying agent_zero_cli.py to /usr/local/bin...
-    3. Creating the 'A0' alias...
-    4. Setting up system-wide configuration...
-       - Configuration copied to /etc/agent_zero/.env
-    ✅ Installation complete!
-    You can now use 'A0' from anywhere in your terminal.
-    ```
+## Uninstalling
+
+To completely remove the Agent Zero CLI from your system, you can run the `uninstall.sh` script. This will remove the alias, the virtual environment, and all configuration files.
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/diramazioni/agent-zero-cli/refs/heads/main/uninstall.sh | sudo sh
+```
+
+The uninstallation script will:
+- Remove the `A0` alias from `/usr/local/bin`.
+- Delete the entire virtual environment directory at `/opt/agent_zero_venv`.
+- Remove the system-wide configuration directory at `/etc/agent_zero`.
 
 ## Configuration (`.env`)
 
