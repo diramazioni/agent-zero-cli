@@ -8,6 +8,7 @@ import subprocess
 import re
 from fastmcp import Client
 from pathlib import Path
+from urllib.parse import urlparse
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from dotenv import load_dotenv
@@ -39,19 +40,47 @@ def execute_command(command):
         return f"Error executing command: {str(e)}"
 
 def process_message_with_commands(message):
-    """Process message and replace `command` with subprocess output"""
-    # Pattern per trovare comandi tra backticks
+    """Process message and replace `command` with subprocess output and @file/url with content"""
+    # Pattern to find commands within backticks
     command_pattern = r'`([^`]+)`'
     
     def replace_command(match):
         command = match.group(1).strip()
-        # Esegui il comando e restituisci l'output
         output = execute_command(command)
-        # Restituisci l'output formattato
         return f"```\n{output}\n```"
     
-    # Sostituisci tutti i comandi trovati
-    processed_message = re.sub(command_pattern, replace_command, message)
+    # Pattern to find file/URL references with @
+    # Capture the path/URL after '@'
+    file_url_pattern = r'@([^\s]+)'
+    
+    def replace_file_or_url(match):
+        ref = match.group(1).strip()
+        
+        # Check if it's a valid URL
+        try:
+            result = urlparse(ref)
+            if all([result.scheme, result.netloc]):
+                # It's a URL, replace with the fetch prompt
+                return f"use mcp fetch url {ref}"
+        except ValueError:
+            pass # Not a valid URL, proceed as file
+            
+        # If not a URL, treat it as a local file path
+        file_path = Path(ref)
+        if file_path.is_file():
+            try:
+                content = file_path.read_text()
+                return f"File content '{ref}':\n{content}"
+            except Exception as e:
+                return f"Error reading file '{ref}': {str(e)}"
+        else:
+            return f"Error: File not found or not a regular file: '{ref}'"
+    
+    # First, replace file/URL references to prevent backticks within them from being processed
+    processed_message = re.sub(file_url_pattern, replace_file_or_url, message)
+    
+    # Then, replace all found commands
+    processed_message = re.sub(command_pattern, replace_command, processed_message)
     
     return processed_message
 
@@ -59,21 +88,21 @@ def format_agent_response(result):
     """Format Agent Zero response in a user-friendly way"""
     current_chat_id = None
     
-    # Se il risultato è una lista di TextContent (come nell'esempio)
+    # If the result is a list of TextContent (as in the example)
     if isinstance(result, list) and len(result) > 0:
-        # Prendi il primo elemento se è una lista
+        # Get the first element if it's a list
         first_item = result[0]
         if hasattr(first_item, 'text'):
-            # È un TextContent object
+            # It's a TextContent object
             try:
-                # Prova a parsare il JSON dal testo
+                # Try to parse JSON from the text
                 response_data = json.loads(first_item.text)
                 if isinstance(response_data, dict):
                     status = response_data.get('status', 'unknown')
                     response_text = response_data.get('response', '')
                     current_chat_id = response_data.get('chat_id')
                     
-                    # Mostra icona basata sullo status
+                    # Show icon based on status
                     if status == 'success':
                         print("✅ Agent Zero Response:")
                     elif status == 'error':
@@ -81,22 +110,22 @@ def format_agent_response(result):
                     else:
                         print("📨 Agent Zero Response:")
                     
-                    # Mostra solo il testo della risposta
+                    # Show only the response text
                     print(response_text)
                     return current_chat_id
             except json.JSONDecodeError:
-                # Se non è JSON valido, mostra il testo così com'è
+                # If it's not valid JSON, show the text as is
                 print("📨 Agent Zero Response:")
                 print(first_item.text)
                 return current_chat_id
     
-    # Se il risultato è un dizionario diretto
+    # If the result is a direct dictionary
     elif isinstance(result, dict):
         status = result.get('status', 'unknown')
         response_text = result.get('response', '')
         current_chat_id = result.get('chat_id')
         
-        # Mostra icona basata sullo status
+        # Show icon based on status
         if status == 'success':
             print("✅ Agent Zero Response:")
         elif status == 'error':
@@ -104,16 +133,16 @@ def format_agent_response(result):
         else:
             print("📨 Agent Zero Response:")
         
-        # Mostra solo il testo della risposta se presente
+        # Show only the response text if present
         if response_text:
             print(response_text)
         else:
-            # Fallback al JSON completo se non c'è campo response
+            # Fallback to full JSON if no response field
             print(json.dumps(result, indent=2))
         
         return current_chat_id
     
-    # Fallback per altri tipi di risultato
+    # Fallback for other result types
     else:
         print("📨 Agent Zero Response:")
         print(result)
@@ -131,10 +160,10 @@ async def send_message_to_agent(client, message, chat_id=None, persistent_chat=F
         }
     )
     
-    # Formatta la risposta in modo user-friendly
+    # Format Agent Zero response in a user-friendly way
     extracted_chat_id = format_agent_response(result)
     
-    # Usa il chat_id estratto dalla risposta se disponibile, altrimenti quello passato
+    # Use the chat_id extracted from the response if available, otherwise the one passed
     current_chat_id = extracted_chat_id if extracted_chat_id else chat_id
     
     return result, current_chat_id
@@ -164,7 +193,7 @@ async def main():
     # Determine if the chat should be persistent
     is_persistent = not args.one_shot
 
-    # URL del server Agent Zero MCP
+    # Agent Zero MCP server URL
     server_url = "http://localhost:5000/mcp/t-0/sse"
 
     print(f"🔗 Connecting to Agent Zero at: {server_url}")
@@ -177,21 +206,21 @@ async def main():
         print(f"📝 Continuing chat: {args.chat_id}")
     
     try:
-        # Crea il client FastMCP con transport HTTP
+        # Create FastMCP client with HTTP transport
         client = Client(server_url)
         
         async with client:
             print("✅ Connected to Agent Zero")
             
-            # Processa il primo messaggio per eseguire eventuali comandi
+            # Process the first message to execute any commands
             processed_initial_message = process_message_with_commands(args.message)
             
-            # Se il messaggio è stato modificato, mostra cosa verrà inviato
+            # If the message has been modified, show what will be sent
             if processed_initial_message != args.message:
                 print(f"📝 Processed initial message with command outputs:")
                 print(f"📤 Sending to Agent Zero...")
             
-            # Invia il primo messaggio (processato)
+            # Send the first (processed) message
             result, chat_id = await send_message_to_agent(
                 client,
                 processed_initial_message,
@@ -199,7 +228,7 @@ async def main():
                 is_persistent
             )
             
-            # Se è una chat persistente, entra nel loop interattivo
+            # If it's a persistent chat, enter the interactive loop
             if is_persistent:
                 if chat_id:
                     print(f"\n💾 Chat ID: {chat_id}")
@@ -214,7 +243,7 @@ async def main():
                 
                 while True:
                     try:
-                        # Chiedi il prossimo messaggio
+                        # Ask for the next message
                         follow_up = (await session.prompt_async("\n💬 Your message: ")).strip()
                         
                         if follow_up.lower() in ['quit', 'exit', 'q']:
@@ -223,15 +252,15 @@ async def main():
                         if not follow_up:
                             continue
                         
-                        # Processa il messaggio per eseguire eventuali comandi
+                        # Process the message to execute any commands
                         processed_message = process_message_with_commands(follow_up)
                         
-                        # Se il messaggio è stato modificato, mostra cosa verrà inviato
+                        # If the message has been modified, show what will be sent
                         if processed_message != follow_up:
                             print(f"📝 Processed message with command outputs:")
                             print(f"📤 Sending to Agent Zero...")
                         
-                        # Invia il messaggio di follow-up (processato)
+                        # Send the follow-up (processed) message
                         result, chat_id = await send_message_to_agent(
                             client,
                             processed_message,
@@ -246,7 +275,7 @@ async def main():
                         print("\n\n👋 Session ended")
                         break
                 
-                # Termina la chat persistente se abbiamo un chat_id
+                # End the persistent chat if we have a chat_id
                 if chat_id:
                     try:
                         print(f"\n🔚 Ending persistent chat: {chat_id}")

@@ -10,6 +10,7 @@ This project provides a command-line interface (CLI) client for interacting with
 -   **In-Message Command Execution**: Embed shell commands within backticks (e.g., `` `ls -l` ``) directly in your messages. The CLI will execute these commands and replace them with their output before sending the message to Agent Zero.
 -   **System-Wide Installation**: Install the client globally on your system, making it accessible from any directory using a convenient alias.
 -   **`.env` Configuration**: Configure the Agent Zero MCP server URL using a `.env` file.
+-   **File Inclusion (`@`)**: Include content from local files or remote URLs directly in your messages. The CLI will read the specified file or fetch the URL content and insert it into your message before sending it to Agent Zero.
 
 ## Installation
 
@@ -120,3 +121,21 @@ The output will include the result of the `ls -la` command:
 📤 Sending to Agent Zero...
 📨 Agent Zero Response:
 (Agent Zero's response incorporating the command output)
+
+### Including Files or URLs in Messages (`@`)
+
+You can include the content of a local file or a remote URL in your message using the `@` prefix. The CLI will read the content and insert it into your message.
+
+Example (local file):
+
+```bash
+A0 "Here is my code: @./src/main.py"
+```
+
+Example (remote URL):
+
+```bash
+A0 "Please summarize this article: @https://example.com/article.txt"
+```
+
+The CLI will check if it's a valid URL, but it will not process the url, it add a prompt to agent-zero to use the mcp tool `fetch` to fetch the content
