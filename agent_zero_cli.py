@@ -194,7 +194,8 @@ async def main():
     is_persistent = not args.one_shot
 
     # Agent Zero MCP server URL
-    server_url = "http://localhost:5000/mcp/t-0/sse"
+    import os
+    server_url = os.environ.get("AGENT_ZERO_MCP_URL", "http://localhost:5000/mcp/t-0/sse")
 
     print(f"🔗 Connecting to Agent Zero at: {server_url}")
     print(f"💬 Message: {args.message}")
