@@ -16,6 +16,7 @@ It supports persistent chat sessions with history, command execution within mess
 -   **System-Wide Installation**: Install the client globally on your system, making it accessible from any directory using a convenient alias.
 -   **`.env` Configuration**: Configure the Agent Zero MCP server URL using a `.env` file.
 -   **File Inclusion (`@`)**: Include content from local files or remote URLs directly in your messages. The CLI will read the specified file if is local or ask Agent Zero to `fetch` using the mcp tool (the fetch tool should be installed inside Agent Zero).
+-   **Direct Command Execution**: If the agent's response includes a shell command, it will be numbered. You can then execute it directly by typing `run <number>` or `» <number>`.
 
 ## Installation
 
@@ -148,6 +149,35 @@ A0 "Please summarize this article: @https://example.com/article.txt"
 ```
 
 The CLI will check if it's a valid URL, but it will not process the url, it add a prompt to agent-zero to use the mcp tool `fetch` to fetch the content
+
+### Running Commands from Agent Responses
+
+If Agent Zero's response contains a shell command in a `bash` block, the CLI will automatically format it, remove the markdown, and assign it a number.
+
+Example response from Agent Zero:
+
+```
+I can list the files for you.
+```bash
+ls -l
+```
+```
+
+The CLI will display this as:
+
+```
+✅ Agent Zero Response:
+I can list the files for you.
+  [1] ls -l
+```
+
+You can then execute this command directly in the follow-up prompt:
+
+```
+💬 Your message: run 1
+```
+
+The CLI will execute `ls -l` and display its output. This provides a seamless way to run commands suggested by the agent.
 
 ## Authors
 This CLI is not affiliated with [Agent Zero](https://github.com/frdel/agent-zero). 

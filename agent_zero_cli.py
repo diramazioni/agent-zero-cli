@@ -13,6 +13,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from dotenv import load_dotenv
 
+COMMAND_HISTORY = []
+
 def execute_command(command):
     """Execute a shell command and return its output"""
     try:
@@ -30,9 +32,10 @@ def execute_command(command):
             print(f"✅ Command output ({len(output)} chars)")
             return output
         else:
+            output = result.stdout.strip()
             error_output = result.stderr.strip()
             print(f"❌ Command failed (exit code {result.returncode})")
-            return f"Error (exit code {result.returncode}): {error_output}"
+            return f"Error (exit code {result.returncode}): {error_output}\n{output}"
             
     except subprocess.TimeoutExpired:
         return "Error: Command timed out after 30 seconds"
@@ -84,8 +87,37 @@ def process_message_with_commands(message):
     
     return processed_message
 
+def format_and_extract_commands(text):
+    """Formats bash commands and extracts them into COMMAND_HISTORY"""
+    global COMMAND_HISTORY
+    
+    bash_pattern = r"```bash\n(.*?)\n```"
+    
+    new_text = ""
+    last_end = 0
+    
+    for match in re.finditer(bash_pattern, text, re.DOTALL):
+        command = match.group(1).strip()
+        if not command: # Skip empty command blocks
+            continue
+            
+        COMMAND_HISTORY.append(command)
+        command_index = len(COMMAND_HISTORY)
+        
+        new_text += text[last_end:match.start()]
+        # Using a light blue for the command for better visibility on light/dark backgrounds
+        formatted_command = f"  \033[94m[{command_index}] {command}\033[0m"
+        new_text += formatted_command
+        last_end = match.end()
+        
+    new_text += text[last_end:]
+    
+    return new_text
+
 def format_agent_response(result):
     """Format Agent Zero response in a user-friendly way"""
+    global COMMAND_HISTORY
+    COMMAND_HISTORY.clear()
     current_chat_id = None
     
     # If the result is a list of TextContent (as in the example)
@@ -111,12 +143,14 @@ def format_agent_response(result):
                         print("📨 Agent Zero Response:")
                     
                     # Show only the response text
-                    print(response_text)
+                    formatted_response = format_and_extract_commands(response_text)
+                    print(formatted_response)
                     return current_chat_id
             except json.JSONDecodeError:
                 # If it's not valid JSON, show the text as is
                 print("📨 Agent Zero Response:")
-                print(first_item.text)
+                formatted_response = format_and_extract_commands(first_item.text)
+                print(formatted_response)
                 return current_chat_id
     
     # If the result is a direct dictionary
@@ -135,7 +169,8 @@ def format_agent_response(result):
         
         # Show only the response text if present
         if response_text:
-            print(response_text)
+            formatted_response = format_and_extract_commands(response_text)
+            print(formatted_response)
         else:
             # Fallback to full JSON if no response field
             print(json.dumps(result, indent=2))
@@ -145,7 +180,11 @@ def format_agent_response(result):
     # Fallback for other result types
     else:
         print("📨 Agent Zero Response:")
-        print(result)
+        if isinstance(result, str):
+            formatted_response = format_and_extract_commands(result)
+            print(formatted_response)
+        else:
+            print(result)
         return current_chat_id
 
 async def send_message_to_agent(client, message, chat_id=None, persistent_chat=False):
@@ -252,6 +291,21 @@ async def main():
                         
                         if not follow_up:
                             continue
+
+                        # Handle 'run' command
+                        if follow_up.lower().startswith('run ') or follow_up.startswith('» '):
+                            try:
+                                command_index = int(follow_up.split(' ')[1]) - 1
+                                if 0 <= command_index < len(COMMAND_HISTORY):
+                                    command_to_run = COMMAND_HISTORY[command_index]
+                                    output = execute_command(command_to_run)
+                                    if output:
+                                        print(output)
+                                else:
+                                    print("❌ Invalid command number.")
+                            except (ValueError, IndexError):
+                                print("❌ Invalid 'run' command format. Use 'run <number>'.")
+                            continue # Ask for next input
                         
                         # Process the message to execute any commands
                         processed_message = process_message_with_commands(follow_up)
